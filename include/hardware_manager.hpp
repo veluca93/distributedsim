@@ -45,13 +45,6 @@ protected:
         return rng() % max_id;
     }
 
-    /**
-     * Check if a can send to b
-     */
-    virtual bool can_send_(id_t a, id_t b) const {
-        return a != b;
-    }
-
 public:
     HardwareManager(
         id_t max_id,
@@ -65,7 +58,6 @@ public:
      * Check if a can send to b
      */
     bool can_send(id_t a, id_t b) const {
-        std::lock_guard<std::mutex> l(nodes_m);
         return a != b;
     }
 
@@ -252,9 +244,9 @@ public:
                     nodes_queue.pop();
                 }
                 try {
-                    std::lock_guard<std::mutex> lck(node->get_mutex());
-                    if (!node->handle_one_message()) {
-                        std::cerr << "No message was present!" << std::endl;
+                    while (true) {
+                        std::lock_guard<std::mutex> lck(node->get_mutex());
+                        if (!node->handle_one_message()) break;
                     }
                 } catch (std::exception& e) {
                     std::cerr << e.what() << std::endl;

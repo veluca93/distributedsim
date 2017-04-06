@@ -15,6 +15,7 @@
 #include <experimental/optional>
 #define OPTNS std::experimental
 #endif
+#include <queue>
 #include "hardware_manager.hpp"
 #include "message.hpp"
 
@@ -92,7 +93,6 @@ protected:
      */
     Node(HardwareManager<T>* manager, id_t id): manager_(manager), id_(id) {}
 
-    public:
      /**
      * Adds a message to the queue
      */
