@@ -24,19 +24,30 @@ public:
     typedef void(callback_fun)(const Node<T>* n, Message<T>);
 private:
     const id_t max_id;
+    const int nthreads;
     const uint64_t fail_thres;
-    std::map<id_t, std::shared_ptr<Node<T>>> nodes;
-    mutable std::mutex nodes_m;
+    std::map<id_t, std::unique_ptr<Node<T>>> nodes;
 
-    mutable std::mutex queue_m;
-    std::condition_variable queue_empty;
-    std::queue<id_t> nodes_queue;
+    mutable std::vector<std::mutex> queue_m;
+    std::vector<std::queue<id_t>> nodes_queue;
+    std::vector<std::condition_variable> queue_cv;
     std::atomic<bool> stopping;
+    std::atomic<bool> pausing;
+    std::atomic<int> running_threads;
     std::vector<std::thread> workers;
     std::function<callback_fun> complete_callback_;
 
     xoroshiro rng;
-    
+
+    /**
+     * Computes the actual number of threads in function of nt.
+     */
+    int compute_nthreads(int nt) const {
+        int nthreads = nt;
+        if (nthreads == -1) nthreads = std::thread::hardware_concurrency();
+        if (nthreads == 0) nthreads = 1;
+        return nthreads;
+    }
 protected:
     /**
      * Generate a random id
@@ -49,10 +60,24 @@ public:
     HardwareManager(
         id_t max_id,
         std::function<callback_fun> complete_callback,
+        int nt,
         double link_fail_chance = 0
-    ): max_id(max_id),
+    ): max_id(max_id), nthreads{compute_nthreads(nt)},
        fail_thres(link_fail_chance * std::numeric_limits<uint64_t>::max()),
-       stopping(false), complete_callback_(complete_callback) {}
+       queue_m(nthreads), nodes_queue(nthreads), queue_cv(nthreads),
+       stopping(false), pausing(false), running_threads(0),
+       complete_callback_(complete_callback) {}
+
+    class run_lock {
+        HardwareManager* manager;
+    public:
+        run_lock(HardwareManager* manager): manager(manager) {
+            manager->pause();
+        }
+        ~run_lock() {
+            manager->resume();
+        }
+    };
 
     /**
      * Check if a can send to b
@@ -70,7 +95,6 @@ public:
         id_t n,
         const std::function<bool(id_t)>& callback
     ) const {
-        std::lock_guard<std::mutex> l(nodes_m);
         for (auto& node: nodes) {
             if (can_send(n, node.second->id())) {
                 if (!callback(node.second->id())) break;
@@ -115,7 +139,6 @@ public:
      * exception if there is none.
      */
     id_t next_id(id_t i) const {
-        std::lock_guard<std::mutex> l(nodes_m);
         if (!has_bigger_id(i)) throw std::runtime_error("Invalid argument");
         return nodes.lower_bound(i)->first;
     }
@@ -124,12 +147,9 @@ public:
      * Generates a message at a given node.
      */
     void gen_message(id_t sender) {
-        std::shared_ptr<Node<T>> nd;
-        {
-            std::lock_guard<std::mutex> l(nodes_m);
-            if (!nodes.count(sender)) throw std::runtime_error("Invalid sender");
-            nd = nodes.at(sender);
-        }
+        Node<T>* nd;
+        if (!nodes.count(sender)) throw std::runtime_error("Invalid sender");
+        nd = nodes.at(sender).get();
         std::lock_guard<std::mutex> lck{nd->get_mutex()};
         try {
             nd->start_message(Message<T>{});
@@ -145,30 +165,28 @@ public:
      */
     void send_message(id_t sender, id_t receiver, Message<T> msg) {
         if (rng() < fail_thres) return;
-        std::shared_ptr<Node<T>> nd;
-        {
-            std::lock_guard<std::mutex> l(nodes_m);
-            if (!nodes.count(sender))
-                throw std::runtime_error("Invalid sender");
-            if (!nodes.count(receiver))
-                throw std::runtime_error("Invalid receiver");
-            nd = nodes.at(receiver);
-        }
+        Node<T>* nd;
+        if (!nodes.count(sender))
+            throw std::runtime_error("Invalid sender");
+        if (!nodes.count(receiver))
+            throw std::runtime_error("Invalid receiver");
+        nd = nodes.at(receiver).get();
         if (!can_send(sender, receiver))
             throw std::runtime_error("The sender cannot send to the receiver!");
         msg.hops++;
         nd->enqueue(std::move(msg));
-        std::lock_guard<std::mutex> lck(queue_m);
-        nodes_queue.push(receiver);
-        queue_empty.notify_one();
+        uint64_t idx = receiver % nthreads;
+        std::lock_guard<std::mutex> lck(queue_m[idx]);
+        nodes_queue[idx].push(receiver);
+        queue_cv[idx].notify_one();
     }
 
     /**
      * Makes a node fail.
      */
     void fail(id_t node) {
-        std::lock_guard<std::mutex> l(nodes_m);
         if (!nodes.count(node)) throw std::runtime_error("Invalid node");
+        run_lock lck(this);
         nodes.erase(node);
     }
 
@@ -177,9 +195,10 @@ public:
      */
     template<typename node_t, typename... Args>
     void add_node(id_t id, Args... args) {
+        pause();
         {
-            std::lock_guard<std::mutex> l(nodes_m);
-            nodes.emplace(id, std::make_shared<node_t>(this, id, args...));
+            run_lock lck(this);
+            nodes.emplace(id, std::make_unique<node_t>(this, id, args...));
         }
         std::lock_guard<std::mutex> lck{nodes.at(id)->get_mutex()};
         try {
@@ -220,28 +239,23 @@ public:
     }
 
     /**
-     * Starts handling messages in nt threads.
-     *
-     * TODO: fix very high contention for multithreaded code
+     * Starts handling messages.
      */
-    template<int nt = -1>
     void run() {
-        int nthreads = nt;
-        if (nthreads == -1) nthreads = std::thread::hardware_concurrency();
-        if (nthreads == 0) nthreads = 1;
         stopping = false;
-        auto workerfun = [&] () {
+        pausing = false;
+        auto workerfun = [&] (int thread_idx) {
+            running_threads++;
             while (!stopping) {
-                std::shared_ptr<Node<T>> node;
+                Node<T>* node;
                 {
-                    std::unique_lock<std::mutex> lck(queue_m);
-                    while (!stopping && nodes_queue.empty()) {
-                        queue_empty.wait(lck);
+                    std::unique_lock<std::mutex> lck(queue_m[thread_idx]);
+                    while (!stopping && nodes_queue[thread_idx].empty()) {
+                        queue_cv[thread_idx].wait(lck);
                     }
                     if (stopping) break;
-                    std::lock_guard<std::mutex> l(nodes_m);
-                    node = nodes.at(nodes_queue.front());
-                    nodes_queue.pop();
+                    node = nodes.at(nodes_queue[thread_idx].front()).get();
+                    nodes_queue[thread_idx].pop();
                 }
                 try {
                     while (true) {
@@ -251,12 +265,38 @@ public:
                 } catch (std::exception& e) {
                     std::cerr << e.what() << std::endl;
                 }
+                if (pausing) {
+                    running_threads--;
+                    while (pausing) {
+                        using namespace std::literals::chrono_literals;
+                        std::this_thread::sleep_for(10us);
+                    }
+                    running_threads++;
+                }
             }
         };
         workers.clear();
         for (int i=0; i<nthreads; i++) {
-            workers.emplace_back(workerfun);
+            workers.emplace_back(workerfun, i);
         }
+    }
+
+    /**
+     * Pauses the handling of messages.
+     */
+    void pause() {
+        pausing = true;
+        while (running_threads != 0) {
+            using namespace std::literals::chrono_literals;
+            std::this_thread::sleep_for(10us);
+        }
+    }
+
+    /**
+     * Resumes the handling of messages.
+     */
+    void resume() {
+        pausing = false;
     }
 
     /**
@@ -264,9 +304,9 @@ public:
      */
     void stop() {
         stopping = true;
-        for (auto& wrk: workers) {
-            queue_empty.notify_all();
-            wrk.join();
+        for (int i=0; i<nthreads; i++) {
+            queue_cv[i].notify_all();
+            workers[i].join();
         }
     }
 

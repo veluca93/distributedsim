@@ -14,12 +14,12 @@ int main(int argc, char** argv) {
         counts[msg.get_hops()]++;
         received_messages++;
     };
-    HardwareManager<std::size_t> hwm(1<<bits, complete_callback);
+    HardwareManager<std::size_t> hwm(1<<bits, complete_callback, 4);
     for (unsigned i=0; i<nodes; i++) {
         hwm.add_node<ChordNode>(hwm.gen_id(), bits);
         //std::cerr << "Added node " << i << std::endl;
     }
-    hwm.run<1>();
+    hwm.run();
     for (unsigned i=0; i<messages; i++) {
         hwm.gen_message(hwm.get_random_node());
         //std::cerr << "Generated message " << i << std::endl;
