@@ -37,7 +37,10 @@ private:
     std::vector<std::thread> workers;
     std::function<callback_fun> complete_callback_;
 
-    xoroshiro rng;
+    static uint64_t rng() {
+        thread_local xoroshiro rng_;
+        return rng_();
+    }
 
     /**
      * Computes the actual number of threads in function of nt.
