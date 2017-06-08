@@ -17,16 +17,14 @@
 
 template <typename T>
 class HardwareManager {
-public:
-    typedef std::size_t id_t;
 private:
-    const id_t max_id;
+    const node_id_t max_id;
     const int nthreads;
     const uint64_t fail_thres;
-    std::map<id_t, std::unique_ptr<Node<T>>> nodes;
+    std::map<node_id_t, std::unique_ptr<Node<T>>> nodes;
 
     mutable std::vector<std::mutex> queue_m;
-    std::vector<std::queue<id_t>> nodes_queue;
+    std::vector<std::queue<node_id_t>> nodes_queue;
     std::vector<std::condition_variable> queue_cv;
     std::atomic<bool> stopping;
     std::atomic<bool> pausing;
@@ -51,13 +49,13 @@ protected:
     /**
      * Generate a random id
      */
-    id_t random_id() {
+    node_id_t random_id() {
         return rng() % max_id;
     }
 
 public:
     HardwareManager(
-        id_t max_id,
+        node_id_t max_id,
         int nt,
         double link_fail_chance = 0
     ): max_id(max_id), nthreads{compute_nthreads(nt)},
@@ -79,7 +77,7 @@ public:
     /**
      * Check if a can send to b
      */
-    bool can_send(id_t a, id_t b) const {
+    bool can_send(node_id_t a, node_id_t b) const {
         return a != b;
     }
 
@@ -89,8 +87,8 @@ public:
      * the iteration ends.
      */
     virtual void iter_neighbours(
-        id_t n,
-        const std::function<bool(id_t)>& callback
+        node_id_t n,
+        const std::function<bool(node_id_t)>& callback
     ) const {
         for (auto& node: nodes) {
             if (can_send(n, node.second->id())) {
@@ -102,9 +100,9 @@ public:
     /**
      * Return a vector containing n's neihbours.
      */
-    virtual std::vector<id_t> get_neighbours(id_t n) const {
-        std::vector<id_t> ans;
-        iter_neighbours(n, [&ans] (id_t neigh) {
+    virtual std::vector<node_id_t> get_neighbours(node_id_t n) const {
+        std::vector<node_id_t> ans;
+        iter_neighbours(n, [&ans] (node_id_t neigh) {
             ans.push_back(neigh);
             return true;
         });
@@ -114,9 +112,9 @@ public:
     /**
      * Return the number of n's neighbours.
      */
-    virtual std::size_t count_neighbours(id_t n) const {
+    virtual std::size_t count_neighbours(node_id_t n) const {
         std::size_t ans;
-        iter_neighbours(n, [&ans] (id_t neigh) {
+        iter_neighbours(n, [&ans] (node_id_t neigh) {
             ans++;
             return true;
         });
@@ -127,7 +125,7 @@ public:
      * Returns true if there is a node with id bigger than or equal to
      * the given one.
      */
-    bool has_bigger_id(id_t i) const {
+    bool has_bigger_id(node_id_t i) const {
         return nodes.end() != nodes.lower_bound(i);
     }
 
@@ -135,7 +133,7 @@ public:
      * Returns the next id bigger than or equal to the argument. Raises an
      * exception if there is none.
      */
-    id_t next_id(id_t i) const {
+    node_id_t next_id(node_id_t i) const {
         if (!has_bigger_id(i)) throw std::runtime_error("Invalid argument");
         return nodes.lower_bound(i)->first;
     }
@@ -143,7 +141,7 @@ public:
     /**
      * Generates a message at a given node.
      */
-    void gen_message(id_t sender) {
+    void gen_message(node_id_t sender) {
         Node<T>* nd;
         if (!nodes.count(sender)) throw std::runtime_error("Invalid sender");
         nd = nodes.at(sender).get();
@@ -160,7 +158,7 @@ public:
      * or the receiver do not exist or if the sender cannot send messages to
      * the receiver.
      */
-    void send_message(id_t sender, id_t receiver, Message<T> msg) {
+    void send_message(node_id_t sender, node_id_t receiver, Message<T> msg) {
         if (rng() < fail_thres) return;
         if (!nodes.count(sender))
             throw std::runtime_error("Invalid sender");
@@ -181,7 +179,7 @@ public:
     /**
      * Makes a node fail.
      */
-    void fail(id_t node) {
+    void fail(node_id_t node) {
         if (!nodes.count(node)) throw std::runtime_error("Invalid node");
         run_lock lck(this);
         nodes.erase(node);
@@ -191,7 +189,7 @@ public:
      * Add a single node.
      */
     template<typename node_t, typename... Args>
-    void add_node(id_t id, Args... args) {
+    void add_node(node_id_t id, Args... args) {
         pause();
         {
             run_lock lck(this);
@@ -210,11 +208,11 @@ public:
      *
      * TODO: make this work when there are a lot of nodes
      */
-    id_t gen_id() {
+    node_id_t gen_id() {
         if (4 * nodes.size() / 3 >= max_id) {
             throw std::runtime_error("Too many ids generated");
         }
-        id_t newid = random_id();
+        node_id_t newid = random_id();
         while (nodes.count(newid)) {
             newid = random_id();
         }
@@ -226,9 +224,9 @@ public:
      *
      * TODO: make this faster when there are very few nodes
      */
-    id_t get_random_node() {
+    node_id_t get_random_node() {
         if (nodes.size() == 0) throw std::runtime_error("Empty node list");
-        id_t id = random_id();
+        node_id_t id = random_id();
         while (!has_bigger_id(id)) {
             id = random_id();
         }

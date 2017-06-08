@@ -25,11 +25,10 @@ using namespace std::chrono;
 template <typename T>
 class Node {
 public:
-    typedef typename HardwareManager<T>::id_t id_t;
     friend class HardwareManager<T>;
 private:
     HardwareManager<T>* manager_;
-    id_t id_;
+    node_id_t id_;
 
     typedef std::pair<time_point<high_resolution_clock>, Message<T>> p_msg_t;
     // Simple queue for undelayed messages
@@ -97,7 +96,7 @@ protected:
     /**
      * Gets the node's id.
      */
-    id_t id() const {return id_;}
+    node_id_t id() const {return id_;}
 
     /**
      * Gets the node's hardware manager.
@@ -107,7 +106,7 @@ protected:
     /**
      * Constructor
      */
-    Node(HardwareManager<T>* manager, id_t id): manager_(manager), id_(id) {}
+    Node(HardwareManager<T>* manager, node_id_t id): manager_(manager), id_(id) {}
 
      /**
      * Adds a message to the queue. If the message cannot be enqueued,
