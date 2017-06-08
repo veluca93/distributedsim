@@ -14,9 +14,9 @@ int main(int argc, char** argv) {
         counts[msg.get_hops()]++;
         received_messages++;
     };
-    HardwareManager<std::size_t> hwm(1<<bits, complete_callback, 4);
+    HardwareManager<std::size_t> hwm(1<<bits, 4);
     for (unsigned i=0; i<nodes; i++) {
-        hwm.add_node<ChordNode>(hwm.gen_id(), bits);
+        hwm.add_node<ChordNode>(hwm.gen_id(), bits, complete_callback);
         //std::cerr << "Added node " << i << std::endl;
     }
     hwm.run();

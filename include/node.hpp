@@ -16,8 +16,11 @@
 #define OPTNS std::experimental
 #endif
 #include <queue>
+#include "common.hpp"
 #include "hardware_manager.hpp"
 #include "message.hpp"
+
+using namespace std::chrono;
 
 template <typename T>
 class Node {
@@ -28,7 +31,11 @@ private:
     HardwareManager<T>* manager_;
     id_t id_;
 
+    typedef std::pair<time_point<high_resolution_clock>, Message<T>> p_msg_t;
+    // Simple queue for undelayed messages
     std::queue<Message<T>> messages;
+    // Min-heap for delayed messages
+    std::priority_queue<p_msg_t, std::vector<p_msg_t>, std::greater<p_msg_t>> delayed_messages;
     std::mutex messages_mutex;
 
     // ensures that only one thread is running this node at the same time
@@ -36,18 +43,27 @@ private:
 
     /**
      * Gets a message from the queue and dispatches it to handle_message.
-     * If the queue is empty, do nothing.
+     * If both queues are empty, or if the delayed messages queue only has messages
+     * that should be delivered in the future, do nothing.
+     *
+     * @return 1 if a message was handled, 0 if the queues were empty and -1 if
+     *          there was an enqueued message but it should not be received yet.
      */
-    bool handle_one_message() {
+    int handle_one_message() {
         OPTNS::optional<Message<T>> msg;
         {
             std::lock_guard<std::mutex> lck{messages_mutex};
-            if (messages.size() == 0) return false;
-            msg = std::move(messages.front());
-            messages.pop();
+            if (messages.size() != 0) {
+                msg = std::move(messages.front());
+                messages.pop();
+            } else if (delayed_messages.size() != 0) {
+                if (delayed_messages.top().first > high_resolution_clock::now()) return -1;
+                msg = delayed_messages.top().second;
+                delayed_messages.pop();
+            } else return 0;
         }
         handle_message(std::move(msg.value()));
-        return true;
+        return 1;
     }
 
     /**
@@ -94,12 +110,18 @@ protected:
     Node(HardwareManager<T>* manager, id_t id): manager_(manager), id_(id) {}
 
      /**
-     * Adds a message to the queue
+     * Adds a message to the queue. If the message cannot be enqueued,
+     * it is lost.
      */
     void enqueue(Message<T> msg) {
         std::lock_guard<std::mutex> lck{messages_mutex};
-        if (check_enqueue())
-            messages.push(msg);
+        if (check_enqueue()) {
+            if (msg.delay().count() == 0) {
+                messages.push(msg);
+            } else {
+                delayed_messages.emplace(high_resolution_clock::now() + msg.delay(), msg);
+            }
+        }
     }
 };
 

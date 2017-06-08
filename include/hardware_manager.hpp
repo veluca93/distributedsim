@@ -10,18 +10,15 @@
 #include <condition_variable>
 #include <atomic>
 #include <iostream>
+#include "common.hpp"
 #include "node.hpp"
 #include "message.hpp"
 #include "rng.hpp"
 
 template <typename T>
-class Node;
-
-template <typename T>
 class HardwareManager {
 public:
     typedef std::size_t id_t;
-    typedef void(callback_fun)(const Node<T>* n, Message<T>);
 private:
     const id_t max_id;
     const int nthreads;
@@ -35,7 +32,6 @@ private:
     std::atomic<bool> pausing;
     std::atomic<int> running_threads;
     std::vector<std::thread> workers;
-    std::function<callback_fun> complete_callback_;
 
     static uint64_t rng() {
         thread_local xoroshiro rng_;
@@ -62,14 +58,12 @@ protected:
 public:
     HardwareManager(
         id_t max_id,
-        std::function<callback_fun> complete_callback,
         int nt,
         double link_fail_chance = 0
     ): max_id(max_id), nthreads{compute_nthreads(nt)},
        fail_thres(link_fail_chance * std::numeric_limits<uint64_t>::max()),
        queue_m(nthreads), nodes_queue(nthreads), queue_cv(nthreads),
-       stopping(false), pausing(false), running_threads(0),
-       complete_callback_(complete_callback) {}
+       stopping(false), pausing(false), running_threads(0) {}
 
     class run_lock {
         HardwareManager* manager;
@@ -168,15 +162,15 @@ public:
      */
     void send_message(id_t sender, id_t receiver, Message<T> msg) {
         if (rng() < fail_thres) return;
-        Node<T>* nd;
         if (!nodes.count(sender))
             throw std::runtime_error("Invalid sender");
         if (!nodes.count(receiver))
             throw std::runtime_error("Invalid receiver");
-        nd = nodes.at(receiver).get();
         if (!can_send(sender, receiver))
             throw std::runtime_error("The sender cannot send to the receiver!");
         msg.hops++;
+        Node<T>* nd;
+        nd = nodes.at(receiver).get();
         nd->enqueue(std::move(msg));
         uint64_t idx = receiver % nthreads;
         std::lock_guard<std::mutex> lck(queue_m[idx]);
@@ -263,7 +257,17 @@ public:
                 try {
                     while (true) {
                         std::lock_guard<std::mutex> lck(node->get_mutex());
-                        if (!node->handle_one_message()) break;
+                        int ret = node->handle_one_message();
+                        if (ret == 0) break;
+                        if (ret == 1) continue;
+                        if (ret == -1) {
+                            // Re-enqueue the node for a later execution
+                            std::unique_lock<std::mutex> lck(queue_m[thread_idx]);
+                            nodes_queue[thread_idx].push(node->id());
+                            queue_cv[thread_idx].notify_one();
+                            continue;
+                        }
+                        throw std::runtime_error("Invalid return value from handle_one_message");
                     }
                 } catch (std::exception& e) {
                     std::cerr << e.what() << std::endl;
@@ -312,14 +316,6 @@ public:
             workers[i].join();
         }
     }
-
-    /**
-     * Returns the function that should be called when a message has reached
-     * its destination;
-     */
-    const std::function<callback_fun>& complete_callback() const {
-        return complete_callback_;
-    };
 };
 
 #endif

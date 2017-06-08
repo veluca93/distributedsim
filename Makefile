@@ -1,5 +1,5 @@
 CXX=g++
-CXXFLAGS=-O3 -march=native -Wall
+CXXFLAGS=-O3 -march=native -Wall -std=c++17 -ltcmalloc -flto
 LIBS=-pthread
 INCLUDES=-Iinclude -Iprotocols
 

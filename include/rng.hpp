@@ -1,5 +1,6 @@
 #ifndef DISTSIM_RNG_HPP
 #define DISTSIM_RNG_HPP
+#include <stdint.h>
 
 class xoroshiro {
     // xoroshiro128plus, http://xoroshiro.di.unimi.it/    
