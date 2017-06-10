@@ -18,7 +18,7 @@ ${S_BIN_PATH}:bin/%: examples/%.cpp Makefile $(DEPDIR)/%_cpp.d
 	mv -f $(DEPDIR)/$*.Td $(DEPDIR)/$*_cpp.d
 
 ${M_BIN_PATH}:bin/%: examples/% Makefile $(DEPDIR)/%.d
-	${CXX} $</*.cpp -o $@ ${CXXFLAGS} ${LIBS} ${INCLUDES} ${DEPFLAGS}
+	${CXX} $</*.cpp -o $@ ${CXXFLAGS} ${LIBS} ${INCLUDES} -I $< ${DEPFLAGS}
 	mv -f $(DEPDIR)/$*.Td $(DEPDIR)/$*.d
 
 $(DEPDIR)/%.d: ;
