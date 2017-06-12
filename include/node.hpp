@@ -1,20 +1,7 @@
 #ifndef DISTSIM_NODE_HPP
 #define DISTSIM_NODE_HPP
 #include <mutex>
-#ifdef __has_include
-# if __has_include(<optional>)
-#  include <optional>
-#define OPTNS std
-# elif __has_include(<experimental/optional>)
-#  include <experimental/optional>
-#define OPTNS std::experimental
-# else
-#  error "You need at least one of <optional> and <experimental/optional>!"
-# endif
-#else
-#include <experimental/optional>
-#define OPTNS std::experimental
-#endif
+#include <optional>
 #include <queue>
 #include "common.hpp"
 #include "hardware_manager.hpp"
@@ -48,7 +35,7 @@ private:
      *          there was an enqueued message but it should not be received yet.
      */
     int handle_one_message() {
-        OPTNS::optional<Message<T>> msg;
+        std::optional<Message<T>> msg;
         auto now = high_resolution_clock::now();
         {
             std::lock_guard<std::mutex> lck{messages_mutex};
