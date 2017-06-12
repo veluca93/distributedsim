@@ -17,7 +17,7 @@ auto choose_miners(int N, int num_honest, int num_selfish, const edge_list_t& ed
         }
         for (int i=0; i<N; i++) degree[i].second = i;
         std::sort(degree.begin(), degree.end(), std::greater<std::pair<uint64_t, uint64_t>>());
-        for (int i=0; i<num_selfish; i++) selfish.push_back(degree[i].first);
+        for (int i=0; i<num_selfish; i++) selfish.push_back(degree[i].second);
     } else {
         std::cerr << "Unknown algorithm " << algo << "! Valid types are: random, highdegree" << std::endl;
         exit(-1);
