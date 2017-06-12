@@ -26,6 +26,8 @@ template <typename T>
 class Node {
 public:
     friend class HardwareManager<T>;
+    static std::atomic<long long> queued_messages;
+    static std::atomic<long long> all_messages;
 private:
     HardwareManager<T>* manager_;
     node_id_t id_;
@@ -37,9 +39,6 @@ private:
     std::priority_queue<p_msg_t, std::vector<p_msg_t>, std::greater<p_msg_t>> delayed_messages;
     std::mutex messages_mutex;
 
-    // ensures that only one thread is running this node at the same time
-    std::mutex m;
-
     /**
      * Gets a message from the queue and dispatches it to handle_message.
      * If both queues are empty, or if the delayed messages queue only has messages
@@ -50,29 +49,26 @@ private:
      */
     int handle_one_message() {
         OPTNS::optional<Message<T>> msg;
+        auto now = high_resolution_clock::now();
         {
             std::lock_guard<std::mutex> lck{messages_mutex};
             if (messages.size() != 0) {
                 msg = std::move(messages.front());
                 messages.pop();
             } else if (delayed_messages.size() != 0) {
-                if (delayed_messages.top().first > high_resolution_clock::now()) return -1;
+                if (delayed_messages.top().first > now) return -1;
                 msg = delayed_messages.top().second;
                 delayed_messages.pop();
+                queued_messages--;
             } else return 0;
         }
         handle_message(std::move(msg.value()));
         return 1;
     }
 
-    /**
-     * Return the node's mutex
-     */
-    std::mutex& get_mutex() {return m;}
-
 protected:
     /**
-     * Creates a new message's content and sends it
+     * Creates a new message's content and (possibly) sends it.
      */
     virtual void start_message(Message<T> msg) = 0;
 
@@ -113,15 +109,20 @@ protected:
      * it is lost.
      */
     void enqueue(Message<T> msg) {
+        auto now = high_resolution_clock::now();
         std::lock_guard<std::mutex> lck{messages_mutex};
         if (check_enqueue()) {
             if (msg.delay().count() == 0) {
                 messages.push(msg);
             } else {
-                delayed_messages.emplace(high_resolution_clock::now() + msg.delay(), msg);
+                queued_messages++;
+                all_messages++;
+                delayed_messages.emplace(now + msg.delay(), msg);
             }
         }
     }
+public:
+    virtual ~Node() = default;
 };
 
 #endif

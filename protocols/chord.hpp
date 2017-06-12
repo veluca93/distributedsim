@@ -6,8 +6,7 @@
 class ChordNode: public Node<std::size_t> {
     typedef std::function<void(const Node<std::size_t>* n, Message<std::size_t>)> (callback_fun);
     uint64_t bits;
-    xoroshiro rng;
-    const callback_fun& cb;
+    const callback_fun cb;
     friend class HardwareManager<std::size_t>;
     node_id_t distance(node_id_t other) {
         other %= 1ULL<<bits;
@@ -46,9 +45,9 @@ protected:
      * Creates a new message's content and sends it
      */
     virtual void start_message(Message<node_id_t> msg) override {
-        msg.data() = rng() % (1ULL<<bits);
+        msg.data(rng() % (1ULL<<bits));
         while (successor(msg.data()) == id()) {
-            msg.data() = rng() % (1ULL<<bits);
+            msg.data(rng() % (1ULL<<bits));
         }
         handle_message(msg);
     };

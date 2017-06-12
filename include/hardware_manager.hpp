@@ -5,11 +5,11 @@
 #include <map>
 #include <mutex>
 #include <memory>
-#include <queue>
 #include <thread>
 #include <condition_variable>
 #include <atomic>
 #include <iostream>
+#include "concurrentqueue.hpp"
 #include "common.hpp"
 #include "node.hpp"
 #include "message.hpp"
@@ -23,18 +23,12 @@ private:
     const uint64_t fail_thres;
     std::map<node_id_t, std::unique_ptr<Node<T>>> nodes;
 
-    mutable std::vector<std::mutex> queue_m;
-    std::vector<std::queue<node_id_t>> nodes_queue;
-    std::vector<std::condition_variable> queue_cv;
+    moodycamel::ConcurrentQueue<node_id_t> nodes_queue;
     std::atomic<bool> stopping;
     std::atomic<bool> pausing;
     std::atomic<int> running_threads;
     std::vector<std::thread> workers;
-
-    static uint64_t rng() {
-        thread_local xoroshiro rng_;
-        return rng_();
-    }
+    std::uint64_t seed;
 
     /**
      * Computes the actual number of threads in function of nt.
@@ -53,15 +47,30 @@ protected:
         return rng() % max_id;
     }
 
+    template<typename node_t>
+    void add_node(std::unique_ptr<node_t> ptr) {
+        pause();
+        auto id = ptr->id();
+        {
+            run_lock lck(this);
+            nodes.emplace(id, std::move(ptr));
+        }
+        try {
+            nodes[id]->init();
+        } catch (std::exception& e) {
+            std::cerr << "Error during init!" << std::endl;
+        }
+    }
+
 public:
     HardwareManager(
         node_id_t max_id,
         int nt,
+        uint64_t seed,
         double link_fail_chance = 0
     ): max_id(max_id), nthreads{compute_nthreads(nt)},
        fail_thres(link_fail_chance * std::numeric_limits<uint64_t>::max()),
-       queue_m(nthreads), nodes_queue(nthreads), queue_cv(nthreads),
-       stopping(false), pausing(false), running_threads(0) {}
+       stopping(false), pausing(false), running_threads(0), seed(seed) {}
 
     class run_lock {
         HardwareManager* manager;
@@ -77,7 +86,7 @@ public:
     /**
      * Check if a can send to b
      */
-    bool can_send(node_id_t a, node_id_t b) const {
+    virtual bool can_send(node_id_t a, node_id_t b) const {
         return a != b;
     }
 
@@ -141,16 +150,23 @@ public:
     /**
      * Generates a message at a given node.
      */
-    void gen_message(node_id_t sender) {
+    void gen_message(node_id_t sender, const T& data = T{}) {
         Node<T>* nd;
         if (!nodes.count(sender)) throw std::runtime_error("Invalid sender");
         nd = nodes.at(sender).get();
-        std::lock_guard<std::mutex> lck{nd->get_mutex()};
         try {
-            nd->start_message(Message<T>{});
+            nd->start_message(Message<T>{data});
         } catch (std::exception& e) {
             std::cerr << "Error during start_message!" << std::endl;
         }
+    }
+
+    /**
+     * Gets read-only access to a given node.
+     */
+    const Node<T>* get(node_id_t node) const {
+        if (!nodes.count(node)) throw std::runtime_error("Invalid node");
+        return nodes.at(node).get();
     }
 
     /**
@@ -170,10 +186,7 @@ public:
         Node<T>* nd;
         nd = nodes.at(receiver).get();
         nd->enqueue(std::move(msg));
-        uint64_t idx = receiver % nthreads;
-        std::lock_guard<std::mutex> lck(queue_m[idx]);
-        nodes_queue[idx].push(receiver);
-        queue_cv[idx].notify_one();
+        nodes_queue.enqueue(receiver);
     }
 
     /**
@@ -190,17 +203,7 @@ public:
      */
     template<typename node_t, typename... Args>
     void add_node(node_id_t id, Args... args) {
-        pause();
-        {
-            run_lock lck(this);
-            nodes.emplace(id, std::make_unique<node_t>(this, id, args...));
-        }
-        std::lock_guard<std::mutex> lck{nodes.at(id)->get_mutex()};
-        try {
-            nodes.at(id)->init();
-        } catch (std::exception& e) {
-            std::cerr << "Error during init!" << std::endl;
-        }
+        add_node(std::make_unique<node_t>(this, id, args...));
     }
 
     /**
@@ -240,30 +243,34 @@ public:
         stopping = false;
         pausing = false;
         auto workerfun = [&] (int thread_idx) {
+            rng = xoroshiro(thread_idx+1, seed);
             running_threads++;
-            while (!stopping) {
+            while (true) {
                 Node<T>* node;
-                {
-                    std::unique_lock<std::mutex> lck(queue_m[thread_idx]);
-                    while (!stopping && nodes_queue[thread_idx].empty()) {
-                        queue_cv[thread_idx].wait(lck);
+                node_id_t node_idx;
+                bool was_empty = false;
+                while (!nodes_queue.try_dequeue(node_idx)) {
+                    std::this_thread::sleep_for(std::chrono::microseconds(1));
+                    if (stopping) {
+                        was_empty = true;
+                        break;
                     }
-                    if (stopping) break;
-                    node = nodes.at(nodes_queue[thread_idx].front()).get();
-                    nodes_queue[thread_idx].pop();
                 }
+                if (was_empty) break;
+                node = nodes.at(node_idx).get();
                 try {
+                    int num = 0;
                     while (true) {
-                        std::lock_guard<std::mutex> lck(node->get_mutex());
+                        if (num++ > 128) {
+                            nodes_queue.enqueue(node->id());
+                            break;
+                        }
                         int ret = node->handle_one_message();
                         if (ret == 0) break;
                         if (ret == 1) continue;
                         if (ret == -1) {
-                            // Re-enqueue the node for a later execution
-                            std::unique_lock<std::mutex> lck(queue_m[thread_idx]);
-                            nodes_queue[thread_idx].push(node->id());
-                            queue_cv[thread_idx].notify_one();
-                            continue;
+                            nodes_queue.enqueue(node->id());
+                            break;
                         }
                         throw std::runtime_error("Invalid return value from handle_one_message");
                     }
@@ -310,10 +317,10 @@ public:
     void stop() {
         stopping = true;
         for (int i=0; i<nthreads; i++) {
-            queue_cv[i].notify_all();
             workers[i].join();
         }
     }
+    virtual ~HardwareManager() = default;
 };
 
 #endif

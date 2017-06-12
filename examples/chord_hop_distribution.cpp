@@ -1,5 +1,10 @@
 #include "chord.hpp"
 
+template<>
+std::atomic<long long> Node<std::size_t>::queued_messages{0};
+template<>
+std::atomic<long long> Node<std::size_t>::all_messages{0};
+
 int main(int argc, char** argv) {
     if (argc < 4) {
         std::cerr << "Usage: " << argv[0] << " b n m" << std::endl;
@@ -8,13 +13,13 @@ int main(int argc, char** argv) {
     uint64_t bits = atoi(argv[1]);
     uint64_t nodes = atoi(argv[2]);
     uint64_t messages = atoi(argv[3]);
-    std::vector<uint64_t> counts(bits+1);
+    std::vector<std::atomic<uint64_t>> counts(bits+1);
     std::atomic<uint64_t> received_messages{0};
     auto complete_callback = [&](const Node<std::size_t>* n, Message<std::size_t> msg) {
         counts[msg.get_hops()]++;
         received_messages++;
     };
-    HardwareManager<std::size_t> hwm(1<<bits, 4);
+    HardwareManager<std::size_t> hwm(1<<bits, std::thread::hardware_concurrency(), 0);
     for (unsigned i=0; i<nodes; i++) {
         hwm.add_node<ChordNode>(hwm.gen_id(), bits, complete_callback);
         //std::cerr << "Added node " << i << std::endl;

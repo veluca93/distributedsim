@@ -10,19 +10,21 @@ template <typename T> // T should be default constructible
 class Message {
     friend class HardwareManager<T>;
     std::size_t hops;
-    std::chrono::microseconds delay_;
+    std::chrono::nanoseconds delay_;
     T data_;
-    Message(): hops(0), delay_(0) {}
 public:
-    T& data() {return data_;}
+    Message(const T& data): hops(0), delay_(0), data_(data) {}
+    Message(): hops(0), delay_(0) {}
     std::size_t get_hops() {return hops;}
     template<typename D>
     void delay(const D& new_delay) {
-        delay_ = std::chrono::duration_cast<std::chrono::microseconds>(new_delay);
+        delay_ = std::chrono::duration_cast<std::chrono::nanoseconds>(new_delay);
     }
     auto delay() const {
         return delay_;
     }
+    const T& data() const {return data_;}
+    void data(T data) {data_ = data;};
     bool operator<(const Message<T>& other) const {
         return this < &other;
     }
