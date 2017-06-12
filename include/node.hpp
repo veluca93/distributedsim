@@ -55,6 +55,7 @@ private:
             if (messages.size() != 0) {
                 msg = std::move(messages.front());
                 messages.pop();
+                queued_messages--;
             } else if (delayed_messages.size() != 0) {
                 if (delayed_messages.top().first > now) return -1;
                 msg = delayed_messages.top().second;
@@ -113,6 +114,8 @@ protected:
         std::lock_guard<std::mutex> lck{messages_mutex};
         if (check_enqueue()) {
             if (msg.delay().count() == 0) {
+                queued_messages++;
+                all_messages++;
                 messages.push(msg);
             } else {
                 queued_messages++;

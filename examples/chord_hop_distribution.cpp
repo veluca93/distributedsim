@@ -35,6 +35,7 @@ int main(int argc, char** argv) {
     }
     hwm.stop();
     std::cout.precision(3);
+    std::cout << (long long)Node<std::size_t>::all_messages << " events processed" << std::endl;
     for (unsigned i=1; i<bits+1; i++) {
         std::cout << 1.0*counts[i]/received_messages << " ";
     }

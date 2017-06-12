@@ -86,14 +86,12 @@ protected:
      * Computes the value of a block for the current node.
      */
     double block_value(const TinyBlock& blk) {
-//        fprintf(stderr, "%lld value\n", id());
         double val = 0;
         for (auto tx: *blk.transactions)
             if (tx.destination_node == id())
                 val += tx.amount;
         if (blk.miner == id())
             val += block_reward + transaction_reward*blk.transactions->size();
-//        fprintf(stderr, "%lld done\n", id());
         return val;
     }
 
@@ -101,7 +99,6 @@ protected:
      * Gets called whenever we confirm a block.
      */
     virtual void confirm(const TinyBlock& blk) {
-        //fprintf(stderr, "%lld confirm %d\n", id(), blk.id);
         balance += block_value(blk);
     }
 
@@ -109,7 +106,6 @@ protected:
      * Gets called whenever we unconfirm a block.
      */
     virtual void unconfirm(const TinyBlock& blk) {
-        //fprintf(stderr, "%lld unconfirm %d\n", id(), blk.id);
         balance -= block_value(blk);
     }
 
@@ -120,19 +116,12 @@ protected:
      * that has the current node as target is verified.
      */
     void update_head(size_t new_head) {
-        //size_t a = new_head;
-        //size_t b = head;
         size_t old_head = head;
         head = new_head;
-        //fprintf(stderr, "%d-: %d %d - %d %d\n", id(), a, b, lengths[a], lengths[b]);
         for (; lengths[new_head] > lengths[old_head]; new_head = blockchain[new_head].parent) {
             confirm(blockchain[new_head]);
         }
-        //size_t c = new_head;
-        //size_t d = old_head;
-        //fprintf(stderr, "%d-: %d %d - %d %d\n", id(), c, d, lengths[c], lengths[d]);
         for (; new_head != old_head; new_head = blockchain[new_head].parent, old_head = blockchain[old_head].parent) {
-            //fprintf(stderr, "%d: %d %d - %d %d - %d %d - [%d %d]\n", id(), a, b, c, d, new_head, old_head, lengths[new_head], lengths[old_head]);
             confirm(blockchain[new_head]);
             unconfirm(blockchain[old_head]);
         }
@@ -147,7 +136,6 @@ protected:
         std::vector<TinyBlock> fwd;
         {
             std::lock_guard<std::mutex> blockchain_lock(blockchain_mutex);
-            //fprintf(stderr, "node %lld block %lld\n", id(), block.id);
             // If I have already seen this block, I should not forward it.
             if (satisfies<TinyBlock>(blockchain, block.id, [&](const TinyBlock& blk) {
                 return blk.id != (std::size_t)-1;
@@ -169,7 +157,6 @@ protected:
                 pending_blocks[block.parent].push_back(block);
                 return should_forward;
             }
-            //fprintf(stderr, "%d %d\n", block.id, block.parent);
             vec_set(lengths, block.id, lengths[block.parent]+1);
             if (lengths[block.id] > lengths[head]) update_head(block.id);
             std::swap(fwd, pending_blocks[block.id]);
@@ -210,7 +197,6 @@ protected:
         if (std::holds_alternative<TinyTransaction>(msg.data())) { // We received a transaction
             if (!handle_transaction(std::get<TinyTransaction>(msg.data()))) return;
         } else { // We received a block
-            //fprintf(stderr, "Block message!\n");
             if (!handle_block(std::get<TinyBlock>(msg.data()))) return;
         }
         forward(msg);
